@@ -16,3 +16,16 @@ LIKE=/home/jonas/torch/european/eur.merged.loglike.gz
 ```
 
 
+```
+q<-t(read.table("/home/albrecht/github/MLadmix/eur.merged.loglike.gz.qopt"))
+pop<-scan("/home/jonas/torch/EUR/eur.labels")
+ord <- order(pop)
+pop<-pop[ord]
+q<-q[,ord]
+
+barplot(q,space=0,,col=c("darkred","darkblue","darkgreen"),border=0,xlab="admixture proportions")
+    abline(v=cumsum(table(pop)))
+    m <-table(pop)/2+c(0,cumsum(table(pop))[-length(table(pop))])
+    mtext(names(table(pop)),1,1,adj=m/length(pop))
+
+```
