@@ -127,8 +127,8 @@ typedef struct{
   int stop;
   int startI; 
   int stopI;
-  double ***prodA;
-  double ***prodB;
+  double ***Qthread;
+  double *partLikeThread;
   double nPop;
   double **genos;
   int nInd;
@@ -374,6 +374,8 @@ F doesn't do crap
  */
 
 bgl readGL(const char* fname) {
+  fprintf(stdout,"reading in data ...");
+  fflush(stdout);
   const char *delims = "\t \n";
   gzFile fp = NULL;
   if(Z_NULL==(fp=gzopen(fname,"r"))){
@@ -385,8 +387,10 @@ bgl readGL(const char* fname) {
   char buf[LENS];
 
   //find number of columns
+  std::vector<char*> tmp;
   gzgets(fp,buf,LENS);
-  strtok(buf,delims);
+  tmp.push_back(strdup(buf));
+ strtok(buf,delims);
   int ncols=1;
   while(strtok(NULL,delims))
     ncols++;
@@ -397,7 +401,6 @@ bgl readGL(const char* fname) {
   ret.nInd = (ncols)/Y/2;//this is the number of samples
   
   //read every line into a vector
-  std::vector<char*> tmp;
   while(gzgets(fp,buf,LENS))
     tmp.push_back(strdup(buf));
   
@@ -475,6 +478,7 @@ bgl readGL(const char* fname) {
   }
   //  keeps=ret.keeps;
   gzclose(fp); //clean up filepointer
+   fprintf(stdout,"done\n");
   return ret;
 }
 
@@ -505,6 +509,7 @@ void readDouble(double **d,int x,int y,const char*fname,int neg){
 	d[i][j] = atof(strtok(NULL,delims));
     }
   }
+  fprintf(stdout,"done\n");
   fclose(fp);
 }
 
@@ -845,10 +850,10 @@ int dumpOld =0;
 
 //Q,F are the old F_1,Q_1 are the next startpoint
 
-void emSQ_threadsY(double** Q, double** F, int nSites_start,int nSites_stop, int nInd, int K,double **likes,double **F_1,double **Q_1,int totSites,double ***Qthread, double*** prodB,int startI,int stopI,int threadNumber,int nThreads) {
+void emSQ_threadsY(double** Q, double** F, int nSites_start,int nSites_stop, int nInd, int K,double **likes,double **F_1,double **Q_1,int totSites,double ***Qthread, double* partLike,int startI,int stopI,int threadNumber,int nThreads) {
 
   double fstar[Y];
-
+  partLike[threadNumber] = 0;
   int N=nInd;
   for( int k=0 ; k<K ; k++ )
     for( int m=nSites_start ; m<nSites_stop ; m++ )
@@ -882,6 +887,7 @@ void emSQ_threadsY(double** Q, double** F, int nSites_start,int nSites_stop, int
             F_1[m][k*Y+y] += postKY ; 
           }
         }
+	partLike[threadNumber] += log(sumKY) ; 
       }
     }
   }
@@ -904,17 +910,19 @@ void emSQ_threadsY(double** Q, double** F, int nSites_start,int nSites_stop, int
 
 void *emWrapY(void *a){
   pars *p = (pars *)a; 
-  emSQ_threadsY(p->Q,p->F,p->start,p->stop,p->nInd,p->nPop,p->genos,p->F_1,p->Q_1,p->nSites,p->prodA,p->prodB,p->startI,p->stopI,p->threadNumber,p->nThreads);
+  emSQ_threadsY(p->Q,p->F,p->start,p->stop,p->nInd,p->nPop,p->genos,p->F_1,p->Q_1,p->nSites,p->Qthread,p->partLikeThread,p->startI,p->stopI,p->threadNumber,p->nThreads);
   return NULL;
 }
 
-void em_threadStartY(double **Q,double **Q_new,double **F,double **F_new,int nThreads){
+double em_threadStartY(double **Q,double **Q_new,double **F,double **F_new,int nThreads){
 
+
+  double  loglike=0;
   for(int t=0;t<nThreads;t++)
     for(int i=0;i<myPars[0].nInd;i++)
       for(int k=0;k<myPars[0].nPop;k++){
-	myPars[0].prodA[t][i][k]=0;
-	myPars[0].prodB[t][i][k]=0;
+	myPars[0].Qthread[t][i][k]=0;
+	myPars[0].partLikeThread[t]=0;
       }
 
 
@@ -931,12 +939,14 @@ void em_threadStartY(double **Q,double **Q_new,double **F,double **F_new,int nTh
     if(pthread_join(threads[i], NULL))
       fprintf(stderr,"problems joining\n");
 
+  for(int i=0;i<nThreads;i++)
+    loglike += myPars[i].partLikeThread[i];
   
   for( int n=0 ; n<myPars[0].nInd ; n++ ){
     for( int k=0 ; k<myPars[0].nPop ; k++ ){
       Q_new[n][k]=0;
       for(int i=0;i<nThreads;i++){
-	Q_new[n][k] += myPars[i].prodA[i][n][k];
+	Q_new[n][k] += myPars[i].Qthread[i][n][k];
       }
     }
     double sumQ=0;
@@ -947,7 +957,7 @@ void em_threadStartY(double **Q,double **Q_new,double **F,double **F_new,int nTh
     
     if(sumQ>1.001 || sumQ<0.999){
       fprintf(stderr,"Qnew does not sum to one n=%d Qsum=%f\n",n,sumQ);
-      exit(0);
+      //  exit(0);
 
     }
     //  fprintf(stderr,"Qnew[0] %f %f\n",Q_new[0][0],Q_new[0][1]);
@@ -969,6 +979,7 @@ void em_threadStartY(double **Q,double **Q_new,double **F,double **F_new,int nTh
   #ifdef CHECK
   checkFQ(F_new,Q_new,myPars[0].nSites,myPars[0].nInd,myPars[0].nPop,__FUNCTION__);
   #endif
+  return loglike;
 }
 
  
@@ -1026,18 +1037,18 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
     return 0;
   }
 
-  em_threadStartY(Q,Q_em1,F,F_em1,nThreads);
+  // fist EM step, get difference in F and Q
+  double lik1=em_threadStartY(Q,Q_em1,F,F_em1,nThreads);
   minus(F_em1,F,d.nSites,nPop*Y,F_diff1);
   minus(Q_em1,Q,d.nInd,nPop,Q_diff1 );
-  
+  //calculate sum of squared difference
   double sr2 = sumSquare(F_diff1,d.nSites,nPop*Y)+sumSquare(Q_diff1,d.nInd,nPop);
-  if(sqrt(sr2)<tol){
+  if(sqrt(sr2)<tol){//
     return 0;
-    //break;
   }
-  em_threadStartY(Q_em1,Q_em2,F_em1,F_em2,nThreads);
+  double lik2=em_threadStartY(Q_em1,Q_em2,F_em1,F_em2,nThreads);
   
-
+  //second EM step
   minus(F_em2,F_em1,d.nSites,nPop*Y,F_diff2);
   minus(Q_em2,Q_em1,d.nInd,nPop,Q_diff2 );
   double sq2 = sumSquare(F_diff2,d.nSites,nPop*Y)+sumSquare(Q_diff2,d.nInd,nPop);
@@ -1048,10 +1059,14 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
   minus(F_diff2,F_diff1,d.nSites,nPop*Y,F_diff3);
   minus(Q_diff2,Q_diff1,d.nInd,nPop,Q_diff3);
   double sv2 = sumSquare(F_diff3,d.nSites,nPop*Y)+sumSquare(Q_diff3,d.nInd,nPop);
+
+
+  //prepare magic step
   double alpha = sqrt(sr2/sv2);
   alpha = std::max(stepMin,std::min(stepMax,alpha));
   //  fprintf(stderr,"alpha=%f %f %f\n",alpha,sq2,sv2);  
   //  fprintf(stderr,"some fun\n");
+ 
   #ifdef CHECK
   checkFQ(F,Q,d.nSites,d.nInd,nPop,__FUNCTION__);
   //  fprintf(stderr,"some fun2\n");
@@ -1082,41 +1097,33 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
   }
   map2domainQ(*Q_new,d.nInd,nPop);
   
+  double likNew=-1000000000;
 
-  //fprintf(stderr,"lik %f\n",-likelihood(*Q_new, *F_new, d.nSites, d.nInd, nPop,d.genos));
-  //  checkFQ(*F_new,*Q_new,d.nSites,d.nInd,nPop,__FUNCTION__);
-  if (fabs(alpha - 1) > 0.01){
-    em_threadStartY(*Q_new,Q_tmp,*F_new,F_tmp,nThreads);
-    //*Q_new= Q_tmp;
-    //*F_new = F_tmp;
+  if (fabs(alpha - 1) > 0.01)
+    likNew=em_threadStartY(*Q_new,Q_tmp,*F_new,F_tmp,nThreads);
+
+  if(likNew>lik2){
     std::swap(*Q_new,Q_tmp);
     std::swap(*F_new,F_tmp);
+    if ((alpha - stepMax) > -0.001) {
+      stepMax = mstep*stepMax;
   }
-  
-  //  double lnew = -likelihood(Q_new, F_new, d.nSites, d.nInd, nPop,d.genos);
-  double lnew = 1;
-  #ifdef DO_MIS
-  lnew = -like_tsk(*Q_new, *F_new,nThreads);
-  
-  if ( (lnew > lold + objfnInc)) {
-    //*Q_new= Q_em2;
-    // *F_new = F_em2;
-    fprintf(stderr,"bad guess in %s\n", __FUNCTION__);
+  }
+  else{
+    if (fabs(alpha - 1) > 0.01){
+      fprintf(stderr,"bad guess in %s\n", __FUNCTION__);
+      fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f\n",lik1,lik2,likNew);
+      fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
+      stepMax = std::max(stepMax0, stepMax/mstep);
+	
+    }
     std::swap(*Q_new,Q_em2);
     std::swap(*F_new,F_em2);
-    // lnew = -likelihood(Q_new, F_new, d.nSites, d.nInd, nPop,d.genos);
-    lnew = -like_tsk(*Q_new, *F_new, nThreads);
-    if ((alpha - stepMax) > -0.001)
-      stepMax = std::max(stepMax0, stepMax/mstep);
-  } 
-  #endif
-  if ((alpha - stepMax) > -0.001) {
-    stepMax = mstep*stepMax;
   }
-  //fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
  
-  lold=lnew;
-  return 1;
+ 
+  //fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
+   return 1;
 }
 
 
@@ -1177,16 +1184,6 @@ float calcThres(double **d1,double **d2, int x,int y){
   return diff;
 }
 
-int whichMax(double *g){
-  // equality signs such that when some are equal
-  // the lowest genotype is preferred
-  if(g[0]>=g[1]&&g[0]>=g[2])
-    return 0;
-  if(g[1]>g[0]&&g[1]>=g[2])
-    return 1;
-  else
-    return 2;
-}
 
 void printLikes(bgl &d){
   // to write likelihoods for debugging
@@ -1452,16 +1449,16 @@ int main(int argc, char **argv){
   //update the internal stuff in the pars for the threading
   if(nThreads!=1) {
 
-    double ***prodA;
-    double ***prodB;
-    prodA=allocDouble3(nThreads,d.nInd,nPop);
-    prodB=allocDouble3(nThreads,d.nInd,nPop);
+    double ***Qthread;
+    double *partLikeThread;
+    Qthread=allocDouble3(nThreads,d.nInd,nPop);
+    partLikeThread=new double[nThreads];
 
     int offsets[nThreads+1];
     int offsets2[nThreads+1];
     for(int i=0;i<nThreads;i++){
-      prodA[i] = allocDouble(d.nInd,nPop);
-      prodB[i] = allocDouble(d.nInd,nPop);
+      Qthread[i] = allocDouble(d.nInd,nPop);
+      partLikeThread[i] = 0;
     }
     offsets[0] =0;
     offsets2[0] =0;
@@ -1481,8 +1478,8 @@ int main(int argc, char **argv){
       myPars[i].startI=offsets2[i];
       myPars[i].stopI=offsets2[i+1];
       //	fprintf(stderr,"i=%d sites=(%d, %d): nind=(%d, %d)\n",i,myPars[i].start,myPars[i].stop,myPars[i].startI,myPars[i].stopI);
-      myPars[i].prodA=prodA;
-      myPars[i].prodB=prodB;
+      myPars[i].Qthread=Qthread;
+      myPars[i].partLikeThread=partLikeThread;
       myPars[i].nPop=nPop;
       myPars[i].genos=d.genos;
       myPars[i].nInd=d.nInd;
@@ -1520,7 +1517,7 @@ int main(int argc, char **argv){
       }
     }else {
       if(method ==0) //no acceleration
-	em_threadStartY(Q,Q_new,F,F_new,nThreads);
+	double lik0=em_threadStartY(Q,Q_new,F,F_new,nThreads);
       else{
 	if(emAccelThreadY(d,nPop,F,Q,&F_new,&Q_new,lold,nThreads)==0){
 	  if(errTol>errTolMin){
