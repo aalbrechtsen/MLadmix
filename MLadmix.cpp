@@ -106,14 +106,15 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 char **keeps=NULL;
 #define LENS 800000 //this is the max number of bytes perline, should make bigger
 int SIG_COND =1;//if we catch signal then quit program nicely
-double tol=1e-5; //stopping criteria
+double tol=1e-6; //stopping criteria
 
-double errTolMin=1e-9;
+double errTolMin=1e-7;
 double errTolStart=0.1;
 double errTol=errTolStart;//frequencies and admixture coef cannot be less than this or more than 1-this
 double misTol=0.05;
 int Y;
-
+int verbose;
+int headless;
 //this struct contains nescerray information needed for threading
 typedef struct{
   int ID; 
@@ -988,7 +989,7 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
   //maybe these should be usersettable?
   double stepMin =1;
   double stepMax0 = 1;
-  static double stepMax=stepMax0;
+  static double stepMax=stepMax0*4;
   double mstep=4;
   double objfnInc=1;
   
@@ -1099,28 +1100,38 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
   
   double likNew=-1000000000;
 
-  if (fabs(alpha - 1) > 0.01)
-    likNew=em_threadStartY(*Q_new,Q_tmp,*F_new,F_tmp,nThreads);
+  // if (fabs(alpha - 1) > 0.01)
+  likNew=em_threadStartY(*Q_new,Q_tmp,*F_new,F_tmp,nThreads);
+  double likNew2=likelihoodYthreads(Q_tmp, F_tmp, nThreads);
+  if(likNew<lik2 && likNew2>lik2 && verbose){
+     fprintf(stderr,"bad good guess in %s\n", __FUNCTION__);
+     fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f \t %f \t",lik1,lik2,likNew,likNew2);
+     fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
+ 
 
-  if(likNew>lik2){
+  }
+  if(likNew>lik2 || headless){
     std::swap(*Q_new,Q_tmp);
     std::swap(*F_new,F_tmp);
-    if ((alpha - stepMax) > -0.001) {
+     
+    if ((alpha - stepMax) > -0.001) 
       stepMax = mstep*stepMax;
-  }
+    
   }
   else{
     if (fabs(alpha - 1) > 0.01){
-      fprintf(stderr,"bad guess in %s\n", __FUNCTION__);
-      fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f\n",lik1,lik2,likNew);
-      fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
-      stepMax = std::max(stepMax0, stepMax/mstep);
-	
+      if(verbose){
+	fprintf(stderr,"bad guess in %s\n", __FUNCTION__);
+	fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f \t",lik1,lik2,likNew);
+	fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
+      }
+      stepMax = std::max(stepMax0, stepMax/mstep);	
     }
     std::swap(*Q_new,Q_em2);
     std::swap(*F_new,F_em2);
   }
  
+  
  
   //fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
    return 1;
@@ -1138,6 +1149,7 @@ void info(){
   fprintf(stderr,"\t-qname Admixture proportions\n"); 
   fprintf(stderr,"\t-outfiles Prefix for output files\n"); 
   fprintf(stderr,"\t-printInfo print ID and mean maf for the SNPs that were analysed,\n\t along with sites retained for analysiss\n"); 
+  fprintf(stderr,"\t-v verbose\n"); 
 
   fprintf(stderr,"Setup:\n"); 
   fprintf(stderr,"\t-seed Seed for initial guess in EM\n"); 
@@ -1149,7 +1161,9 @@ void info(){
   fprintf(stderr,"\t-tolLike50 Loglikelihood difference in 50 iterations\n"); 
   fprintf(stderr,"\t-tol Tolerance for convergence\n"); 
   fprintf(stderr,"\t-dymBound Use dymamic boundaries (1: yes (default) 0: no)\n"); 
-  fprintf(stderr,"\t-maxiter Maximum number of EM iterations\n"); 
+  fprintf(stderr,"\t-maxiter Maximum number of EM iterations\n");
+  fprintf(stderr,"\t-headless If 1 then always accept accelerated jump regardless of likelihood\n");
+  
 
 
   fprintf(stderr,"Filtering\n"); 
@@ -1303,6 +1317,8 @@ int main(int argc, char **argv){
   int seed =time(NULL);
   int nThreads = 1;
   float tolLike50=0.1;
+  headless=0;
+  verbose=0;
   Y=0;
  
   // reading arguments
@@ -1320,7 +1336,8 @@ int main(int argc, char **argv){
     else if(strcmp(*argv,"-P")==0) nThreads=atoi(*++argv); 
     else if(strcmp(*argv,"-Y")==0) Y=atoi(*++argv); 
     else if(strcmp(*argv,"-printInfo")==0) printInfo=atoi(*++argv); 
-    else if(strcmp(*argv,"-method")==0 || strcmp(*argv,"-m")==0) method=atoi(*++argv); 
+    else if(strcmp(*argv,"-headless")==0) headless=atoi(*++argv); 
+   else if(strcmp(*argv,"-method")==0 || strcmp(*argv,"-m")==0) method=atoi(*++argv); 
     // different stop chriteria
     else if(strcmp(*argv,"-tolLike50")==0||strcmp(*argv,"-lt50")==0) tolLike50=atof(*++argv);
     else if(strcmp(*argv,"-tol")==0||strcmp(*argv,"-t")==0) tol=atof(*++argv);
