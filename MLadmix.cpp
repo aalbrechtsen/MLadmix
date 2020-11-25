@@ -1079,7 +1079,9 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
  //update with the linear combination
   for(size_t i=0;i<d.nSites;i++)
     for(size_t j=0;j<nPop*Y;j++){
-      (*F_new)[i][j] = F[i][j]+2*alpha*F_diff1[i][j]+alpha*alpha*F_diff3[i][j];
+       (*F_new)[i][j] = F[i][j]+2*alpha*F_diff1[i][j]+alpha*alpha*F_diff3[i][j];
+       //(*F_new)[i][j] = F[i][j]+2*alpha*F_diff1[i][j]+alpha*alpha*(F_diff3[i][j]);
+
       //  if((*F_new)[i][j]<1e-8 || (*F_new)[i][j]>1-1e-8){
       //  fprintf(stderr,"Fnew: %f F: %f Fem1: %f Fem2: %f alpha: %f diff1: %f diff3: %f\n",(*F_new)[i][j],F[i][j],F_em1[i][j],F_em2[i][j],alpha,F_diff1[i][j],F_diff3[i][j]);
       //(*F_new)[i][j]=F_em2[i][j];
@@ -1090,7 +1092,8 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
 
   for(size_t i=0;i<d.nInd;i++){
     for(size_t j=0;j<nPop;j++){
-      (*Q_new)[i][j] = Q[i][j]+2*alpha*Q_diff1[i][j]+alpha*alpha*Q_diff3[i][j];
+       (*Q_new)[i][j] = Q[i][j]+2*alpha*Q_diff1[i][j]+alpha*alpha*Q_diff3[i][j];
+
       // if((*Q_new)[i][j]<1e-8||(*Q_new)[i][j]>1-1e-8)
       //	fprintf(stderr,"(*Q_new)[i][j]: %f\n",(*Q_new)[i][j]);
 
@@ -1098,19 +1101,40 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
   }
   map2domainQ(*Q_new,d.nInd,nPop);
   
-  double likNew=-1000000000;
+  double likAlpha=-1000000000;
 
   // if (fabs(alpha - 1) > 0.01)
-  likNew=em_threadStartY(*Q_new,Q_tmp,*F_new,F_tmp,nThreads);
-  double likNew2=likelihoodYthreads(Q_tmp, F_tmp, nThreads);
-  if(likNew<lik2 && likNew2>lik2 && verbose){
-     fprintf(stderr,"bad good guess in %s\n", __FUNCTION__);
-     fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f \t %f \t",lik1,lik2,likNew,likNew2);
+  likAlpha=em_threadStartY(*Q_new,Q_tmp,*F_new,F_tmp,nThreads);
+  double likAlphaEM=-likAlpha;
+  if(headless==0)
+    likAlphaEM=likelihoodYthreads(Q_tmp, F_tmp, nThreads);
+  if(verbose || lik1>lik2 || likAlpha > likAlphaEM){
+    if(likAlpha<lik2 && likAlphaEM>lik2)
+      fprintf(stderr,"bad/good guess \t");
+    else if(likAlphaEM<lik2)
+      fprintf(stderr,"bad guess \t");
+    else
+      fprintf(stderr,"good guess \t");
+  
+     fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f \tlikEMalpha %f \t",lik1,lik2,likAlpha,likAlphaEM);
      fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
- 
 
+     if(0){
+       lik2=likelihoodYthreads(Q_em1, F_em1, nThreads);
+       double lik3=likelihoodYthreads(Q_em2, F_em2, nThreads);
+       likAlpha=likelihoodYthreads(*Q_new, *F_new, nThreads);
+       likAlphaEM=likelihoodYthreads(Q_tmp, F_tmp, nThreads);
+       fprintf(stderr,"recalc: lik2 %f\tlik3 %f\tlikAlpha %f \tlikEMalpha %f \t",lik2,lik3,likAlpha,likAlphaEM);
+       fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
+     }
+     
+   
   }
-  if(likNew>lik2 || headless){
+
+  
+  if(likAlphaEM>lik2 || headless==2){
+    if(verbose)
+      fprintf(stderr,"alpha move \t");
     std::swap(*Q_new,Q_tmp);
     std::swap(*F_new,F_tmp);
      
@@ -1120,18 +1144,17 @@ int emAccelThreadY(const bgl &d,int nPop,double **F,double **Q,double ***F_new,d
   }
   else{
     if (fabs(alpha - 1) > 0.01){
-      if(verbose){
-	fprintf(stderr,"bad guess in %s\n", __FUNCTION__);
-	fprintf(stderr,"lik1 %f\tlik2 %f\tlikAccel %f \t",lik1,lik2,likNew);
-	fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
-      }
+     
       stepMax = std::max(stepMax0, stepMax/mstep);	
     }
+    if(verbose)
+       fprintf(stderr,"EM2 move \t");
+
     std::swap(*Q_new,Q_em2);
     std::swap(*F_new,F_em2);
   }
  
-  
+   
  
   //fprintf(stderr,"alpha %f stepMax %f\n",alpha,stepMax);
    return 1;
@@ -1162,7 +1185,7 @@ void info(){
   fprintf(stderr,"\t-tol Tolerance for convergence\n"); 
   fprintf(stderr,"\t-dymBound Use dymamic boundaries (1: yes (default) 0: no)\n"); 
   fprintf(stderr,"\t-maxiter Maximum number of EM iterations\n");
-  fprintf(stderr,"\t-headless If 1 then always accept accelerated jump regardless of likelihood\n");
+  fprintf(stderr,"\t-headless If 2 then always accept accelerated jump regardless of likelihood, 1 to use likEM2 vs. likAlpha, 0 likEM2 vs. likEMalpha\n");
   
 
 
@@ -1336,6 +1359,7 @@ int main(int argc, char **argv){
     else if(strcmp(*argv,"-P")==0) nThreads=atoi(*++argv); 
     else if(strcmp(*argv,"-Y")==0) Y=atoi(*++argv); 
     else if(strcmp(*argv,"-printInfo")==0) printInfo=atoi(*++argv); 
+    else if(strcmp(*argv,"-v")==0) verbose=atoi(*++argv); 
     else if(strcmp(*argv,"-headless")==0) headless=atoi(*++argv); 
    else if(strcmp(*argv,"-method")==0 || strcmp(*argv,"-m")==0) method=atoi(*++argv); 
     // different stop chriteria
